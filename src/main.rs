@@ -1,38 +1,86 @@
+mod commands;
+
 use std::env;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use serenity::async_trait;
-use serenity::model::channel::Message;
+use serenity::framework::standard::macros::group;
+use serenity::framework::standard::Configuration;
+use serenity::framework::StandardFramework;
+use serenity::gateway::ShardManager;
+use serenity::http::Http;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
+use tracing::{error, info};
+
+use crate::commands::ping::*;
+
+pub struct ShardManagerContainer;
+
+impl TypeMapKey for ShardManagerContainer {
+    type Value = Arc<ShardManager>;
+}
 
 struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, msg: Message) {
-        if msg.content == "!ping" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
-                println!("Error sending message: {why:?}");
-            }
-        }
-    }
-
     async fn ready(&self, _: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+        info!("Connected as {}", ready.user.name);
     }
 }
+#[group]
+#[commands(ping)]
+struct General;
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().expect("Failed to load .env file");
+
+    tracing_subscriber::fmt::init();
+
     let token = env::var("BOT_TOKEN").expect("Expected discord token in environment");
 
-    let intents = GatewayIntents::GUILD_MESSAGES
-    | GatewayIntents::DIRECT_MESSAGES
-    | GatewayIntents::MESSAGE_CONTENT;
+    let http = Http::new(&token);
 
-    let mut client = Client::builder(&token, intents).event_handler(Handler).await.expect("Error creating client");
+    let (owners, bot_id) = match http.get_current_application_info().await {
+        Ok(info) => {
+            let mut owners = HashSet::new();
+            if let Some(owner) = &info.owner {
+                owners.insert(owner.id);
+            }
+
+            (owners, info.id)
+        },
+        Err(why) => panic!("Could not access application info: {:?}", why),
+    };
+
+    let framework = StandardFramework::new().group(&GENERAL_GROUP);
+    framework.configure(Configuration::new().owners(owners).prefix("!"));
+
+    let intents = GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::DIRECT_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT;
+    let mut client = Client::builder(&token, intents)
+        .framework(framework)
+        .event_handler(Handler)
+        .await
+        .expect("Error creating client.");
+
+    {
+        let mut data = client.data.write().await;
+        data.insert::<ShardManagerContainer>(client.shard_manager.clone());
+    }
+
+    let shard_manager = client.shard_manager.clone();
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("Could not register ctrl+c handler");
+        shard_manager.shutdown_all().await;
+    });
 
     if let Err(why) = client.start().await {
-        println!("Client error: {why:?}")
+        error!("Client error: {:?}", why)
     }
 }
