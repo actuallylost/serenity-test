@@ -44,7 +44,7 @@ async fn main() {
 
     let http = Http::new(&token);
 
-    let (owners, bot_id) = match http.get_current_application_info().await {
+    let (owners, _bot_id) = match http.get_current_application_info().await {
         Ok(info) => {
             let mut owners = HashSet::new();
             if let Some(owner) = &info.owner {
