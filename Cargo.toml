@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+poise = "0.5"
 dotenv = "0.15"
 tracing = "0.1.27"
 tracing-subscriber = "0.3.18"
